@@ -74,7 +74,7 @@ async function sendEmail(to, subject, html) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: 'LIKE Gift Cards <no-reply@likegiftcards.com>',
+        from: 'LIKE Gift Cards <onboarding@resend.dev>',
         to: [to],
         subject,
         html
@@ -229,3 +229,4 @@ app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`🌐 API: http://localhost:${PORT}/api`);
 });
+
