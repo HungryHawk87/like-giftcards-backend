@@ -1,47 +1,38 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 require('dotenv').config();
 
 const app = express();
 
-// ⚠️ CRITICAL: Middleware order matters!
-// Parse JSON bodies FIRST, before CORS
+// ⚙️ Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// THEN apply CORS
 app.use(cors({
   origin: ['https://hungryhawk87.github.io', 'http://localhost:3000'],
   credentials: true
 }));
 
-// Track MongoDB connection status
+// 🌐 MongoDB connection
 let isMongoConnected = false;
-
-// MongoDB Connection with better error handling
 const MONGODB_URI = process.env.MONGODB_URI;
-
 if (!MONGODB_URI) {
-  console.error('❌ MONGODB_URI is not set in environment variables!');
-  console.error('⚠️  Server will run but gift cards cannot be saved.');
+  console.error('❌ MONGODB_URI missing — gift cards won’t save!');
 } else {
   mongoose.connect(MONGODB_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true
   }).then(() => {
-    console.log('✓ Connected to MongoDB');
+    console.log('✅ Connected to MongoDB');
     isMongoConnected = true;
   }).catch(err => {
     console.error('❌ MongoDB connection error:', err.message);
-    console.error('⚠️  Server will run but gift cards cannot be saved.');
-    isMongoConnected = false;
   });
 }
 
-// Gift Card Schema
+// 🎁 Gift Card Schema
 const giftCardSchema = new mongoose.Schema({
   code: { type: String, required: true, unique: true, index: true },
   recipient: String,
@@ -67,25 +58,44 @@ const giftCardSchema = new mongoose.Schema({
     email: String
   }
 });
-
 const GiftCard = mongoose.model('GiftCard', giftCardSchema);
 
-// Email Configuration
-let transporter = null;
-if (process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
-  transporter = nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
+// ✉️ Email sender using Resend API
+async function sendEmail(to, subject, html) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('❌ RESEND_API_KEY not configured');
+    return { success: false };
+  }
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'LIKE Gift Cards <no-reply@likegiftcards.com>',
+        to: [to],
+        subject,
+        html
+      })
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('❌ Email send failed:', text);
+      return { success: false };
     }
-  });
-  console.log('✓ Email transporter configured');
-} else {
-  console.log('⚠️  Email not configured (EMAIL_USER or EMAIL_PASSWORD missing)');
+
+    console.log(`✅ Email sent to ${to}`);
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Email error:', error.message);
+    return { success: false };
+  }
 }
 
-// Generate unique code
+// 🔢 Generate unique code
 function generateGiftCardCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const parts = [];
@@ -99,33 +109,13 @@ function generateGiftCardCode() {
   return `LIKE-${parts.join('-')}`;
 }
 
-// Send Email
-async function sendEmail(to, subject, html) {
-  if (!transporter) {
-    console.log('⚠️  Email not configured, skipping send');
-    return { success: false };
-  }
-  try {
-    await transporter.sendMail({
-      from: `"LIKE Gift Cards" <${process.env.EMAIL_USER}>`,
-      to, subject, html
-    });
-    console.log(`✓ Email sent to ${to}`);
-    return { success: true };
-  } catch (error) {
-    console.error('❌ Email error:', error.message);
-    return { success: false };
-  }
-}
-
-// Routes
-
+// 🩺 Health check
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     message: 'LIKE Gift Cards API',
     mongodb: isMongoConnected ? 'connected' : 'disconnected',
-    email: transporter ? 'configured' : 'not configured',
+    email: process.env.RESEND_API_KEY ? 'configured' : 'not configured',
     endpoints: {
       health: 'GET /',
       create: 'POST /api/giftcards/create',
@@ -135,46 +125,19 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date(),
-    mongodb: isMongoConnected ? 'connected' : 'disconnected',
-    email: transporter ? 'configured' : 'not configured'
-  });
-});
-
-// Create Gift Card
+// 🧾 Create Gift Card
 app.post('/api/giftcards/create', async (req, res) => {
   try {
     console.log('📥 Received create request:', req.body);
-
-    // Check MongoDB connection
     if (!isMongoConnected) {
-      return res.status(503).json({ 
-        success: false, 
-        message: 'Database not connected. Please check server configuration.' 
-      });
+      return res.status(503).json({ success: false, message: 'Database not connected' });
     }
 
     const { recipient, recipientEmail, senderEmail, amount, currency, currencySymbol, message, denomType } = req.body;
-
-    // Validation
     if (!senderEmail || !amount || !currency) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required fields: senderEmail, amount, currency' 
-      });
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    if (amount < 1) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Amount must be at least 1' 
-      });
-    }
-
-    // Generate unique code
     let code, attempts = 0;
     while (attempts < 10) {
       code = generateGiftCardCode();
@@ -183,217 +146,86 @@ app.post('/api/giftcards/create', async (req, res) => {
       attempts++;
     }
 
-    if (attempts >= 10) {
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Could not generate unique code. Please try again.' 
-      });
-    }
-
-    // Create gift card
     const giftCard = new GiftCard({
-      code, 
-      recipient, 
-      recipientEmail, 
-      senderEmail, 
-      amount,
-      currency, 
-      currencySymbol, 
-      message: message || 'A special gift for you!',
-      denomType: denomType || 'fixed',
-      balance: denomType === 'multi' ? amount : null,
-      status: 'active'
+      code, recipient, recipientEmail, senderEmail, amount, currency, currencySymbol,
+      message: message || 'A special gift for you!', denomType: denomType || 'fixed',
+      balance: denomType === 'multi' ? amount : null, status: 'active'
     });
 
     await giftCard.save();
-    console.log(`✓ Created gift card: ${code} for ${senderEmail}`);
+    console.log(`✅ Created gift card ${code}`);
 
-    // Send email if recipient email provided
-    if (recipientEmail && transporter) {
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #ff8a00;">You've Received a LIKE Gift Card! 🎁</h2>
+    // Send email via Resend
+    if (recipientEmail) {
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
+          <h2 style="color: #ff8a00;">You've Received a LIKE Gift Card 🎁</h2>
           <p>Hi ${recipient || 'there'},</p>
-          <div style="background: linear-gradient(90deg, #0b355b, #093b6d); padding: 20px; border-radius: 12px; color: white; margin: 20px 0;">
-            <h3 style="margin: 0;">Gift Card Code</h3>
+          <div style="background: linear-gradient(90deg, #0b355b, #093b6d); color: white; padding: 20px; border-radius: 12px; margin: 20px 0;">
+            <h3>Gift Card Code</h3>
             <p style="font-size: 24px; font-weight: bold; font-family: monospace;">${code}</p>
             <p><strong>Amount:</strong> ${currencySymbol}${amount}</p>
             ${message ? `<p><strong>Message:</strong> ${message}</p>` : ''}
           </div>
-          <p>Visit https://hungryhawk87.github.io/linkegiftcard.github.io/ to redeem</p>
-        </div>
-      `;
-      await sendEmail(recipientEmail, `Your LIKE Gift Card - ${currencySymbol}${amount}`, emailHtml);
+          <p>Redeem at: https://hungryhawk87.github.io/linkegiftcard.github.io/</p>
+        </div>`;
+      await sendEmail(recipientEmail, `Your LIKE Gift Card - ${currencySymbol}${amount}`, html);
     }
 
     res.json({
       success: true,
       message: 'Gift card created successfully',
-      data: { 
-        code, 
-        amount, 
-        currency, 
-        currencySymbol, 
-        status: 'active', 
-        createdAt: giftCard.createdAt 
-      }
+      data: { code, amount, currency, currencySymbol, status: 'active', createdAt: giftCard.createdAt }
     });
-
-  } catch (error) {
-    console.error('❌ Create error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to create gift card: ' + error.message 
-    });
+  } catch (err) {
+    console.error('❌ Create error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to create gift card: ' + err.message });
   }
 });
 
-// Verify Gift Card
+// 🧾 Verify Gift Card
 app.post('/api/giftcards/verify', async (req, res) => {
   try {
-    console.log('📥 Received verify request:', req.body);
-
-    if (!isMongoConnected) {
-      return res.status(503).json({ 
-        success: false, 
-        message: 'Database not connected' 
-      });
-    }
-
     const { code } = req.body;
-    if (!code) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Gift card code is required' 
-      });
-    }
-
+    if (!code) return res.status(400).json({ success: false, message: 'Code required' });
     const giftCard = await GiftCard.findOne({ code: code.toUpperCase() });
-    if (!giftCard) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Gift card not found' 
-      });
-    }
-
-    console.log(`✓ Verified gift card: ${code}`);
-
-    res.json({
-      success: true,
-      data: {
-        code: giftCard.code,
-        amount: giftCard.amount,
-        currency: giftCard.currency,
-        currencySymbol: giftCard.currencySymbol,
-        status: giftCard.status,
-        balance: giftCard.balance,
-        message: giftCard.message,
-        createdAt: giftCard.createdAt
-      }
-    });
-  } catch (error) {
-    console.error('❌ Verify error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Verification failed: ' + error.message 
-    });
+    if (!giftCard) return res.status(404).json({ success: false, message: 'Gift card not found' });
+    res.json({ success: true, data: giftCard });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Verification failed: ' + err.message });
   }
 });
 
-// Redeem Gift Card
+// 💸 Redeem Gift Card
 app.post('/api/giftcards/redeem', async (req, res) => {
   try {
-    console.log('📥 Received redeem request:', req.body);
-
-    if (!isMongoConnected) {
-      return res.status(503).json({ 
-        success: false, 
-        message: 'Database not connected' 
-      });
-    }
-
-    const { code, withdrawalMethod, bankName, accountName, accountNumber, swiftCode, cryptoNetwork, walletAddress, email } = req.body;
-
+    const { code, withdrawalMethod, email } = req.body;
     if (!code || !withdrawalMethod || !email) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required fields: code, withdrawalMethod, email' 
-      });
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
     const giftCard = await GiftCard.findOne({ code: code.toUpperCase() });
-    if (!giftCard) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Gift card not found' 
-      });
-    }
-    
+    if (!giftCard) return res.status(404).json({ success: false, message: 'Gift card not found' });
     if (giftCard.status !== 'active') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Gift card is ${giftCard.status}` 
-      });
+      return res.status(400).json({ success: false, message: `Gift card is ${giftCard.status}` });
     }
 
     giftCard.status = 'redeemed';
     giftCard.redeemedAt = new Date();
-    giftCard.redemptionDetails = {
-      withdrawalMethod, 
-      bankName, 
-      accountName, 
-      accountNumber, 
-      swiftCode, 
-      cryptoNetwork, 
-      walletAddress, 
-      email
-    };
     await giftCard.save();
 
-    console.log(`✓ Redeemed gift card: ${code}`);
+    await sendEmail(email, `LIKE Gift Card Redemption - ${code}`,
+      `<h3>Your redemption is confirmed</h3><p>Code: ${code}</p><p>Status: redeemed</p>`);
 
-    // Send confirmation email
-    if (transporter) {
-      let paymentDetails = '';
-      if (withdrawalMethod === 'bank') {
-        paymentDetails = `Bank: ${bankName}<br>Account: ${accountNumber}`;
-      } else {
-        paymentDetails = `Network: ${cryptoNetwork}<br>Wallet: ${walletAddress}`;
-      }
-
-      const emailHtml = `
-        <h2 style="color: #ff8a00;">Redemption Confirmed</h2>
-        <p>Code: ${giftCard.code}</p>
-        <p>Amount: ${giftCard.currencySymbol}${giftCard.amount}</p>
-        <p>Method: ${withdrawalMethod}</p>
-        <p>${paymentDetails}</p>
-        <p>Processing time: 2-3 business days</p>
-      `;
-      await sendEmail(email, `LIKE Gift Card Redemption - ${code}`, emailHtml);
-    }
-
-    res.json({
-      success: true,
-      message: 'Gift card redeemed successfully',
-      data: { 
-        code: giftCard.code, 
-        status: 'redeemed',
-        redeemedAt: giftCard.redeemedAt
-      }
-    });
-  } catch (error) {
-    console.error('❌ Redeem error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Redemption failed: ' + error.message 
-    });
+    res.json({ success: true, message: 'Gift card redeemed successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Redemption failed: ' + err.message });
   }
 });
 
+// 🚀 Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✓ Server running on port ${PORT}`);
-  console.log(`✓ API endpoint: http://localhost:${PORT}/api`);
-  console.log(`✓ MongoDB: ${isMongoConnected ? 'CONNECTED' : 'NOT CONNECTED'}`);
-  console.log(`✓ Email: ${transporter ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌐 API: http://localhost:${PORT}/api`);
 });
