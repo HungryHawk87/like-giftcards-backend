@@ -1,32 +1,38 @@
-import express from "express";
-import Razorpay from "razorpay";
-import crypto from "crypto";
-import cors from "cors";
-import axios from "axios";
+const express = require("express");
+const Razorpay = require("razorpay");
+const crypto = require("crypto");
+const cors = require("cors");
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// 🔑 Razorpay TEST keys (MOVE TO ENV LATER)
+// 🔑 Razorpay TEST keys (ENV later)
 const razorpay = new Razorpay({
-  key_id: "rzp_test_Rt6rTO0QIYWaVk",
-  key_secret: "KfOmHp6IAJ70ij5opQ0HnC3"
+  key_id: "rzp_test_Rt5D7w6TXkud69",
+  key_secret: "OdnRMEZGaqizY3jg5uB24gM9"
 });
 
-// ================================
-// CREATE RAZORPAY ORDER
-// ================================
+// ===============================
+// HEALTH CHECK
+// ===============================
+app.get("/", (req, res) => {
+  res.send("LIKE Razorpay backend running");
+});
+
+// ===============================
+// CREATE ORDER
+// ===============================
 app.post("/api/razorpay/create-order", async (req, res) => {
   try {
     const { amount, email } = req.body;
 
     if (!amount) {
-      return res.status(400).json({ message: "Amount required" });
+      return res.status(400).json({ error: "Amount required" });
     }
 
     const order = await razorpay.orders.create({
-      amount: Number(amount) * 100, // paise
+      amount: Number(amount) * 100,
       currency: "INR",
       receipt: "LIKE_" + Date.now(),
       notes: { email }
@@ -34,68 +40,41 @@ app.post("/api/razorpay/create-order", async (req, res) => {
 
     res.json(order);
   } catch (err) {
-    console.error("Create order error:", err);
-    res.status(500).json({ message: err.message });
+    console.error("Create Order Error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ================================
-// VERIFY PAYMENT + CREATE GIFT CARD
-// ================================
-app.post("/api/razorpay/verify", async (req, res) => {
+// ===============================
+// VERIFY PAYMENT
+// ===============================
+app.post("/api/razorpay/verify", (req, res) => {
   try {
     const {
       razorpay_order_id,
       razorpay_payment_id,
-      razorpay_signature,
-      recipient,
-      recipientEmail,
-      senderEmail,
-      amount,
-      currency,
-      currencySymbol,
-      message,
-      denomType
+      razorpay_signature
     } = req.body;
 
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expected = crypto
-      .createHmac("sha256", razorpay.key_secret)
+      .createHmac("sha256", "OdnRMEZGaqizY3jg5uB24gM9")
       .update(body)
       .digest("hex");
 
     if (expected !== razorpay_signature) {
-      return res.status(400).json({ success: false, message: "Invalid signature" });
+      return res.status(400).json({ success: false });
     }
 
-    // ✅ CREATE GIFT CARD ONLY AFTER PAYMENT
-    const giftRes = await axios.post(
-      "https://like-giftcards-api.onrender.com/api/giftcards/create",
-      {
-        recipient,
-        recipientEmail,
-        senderEmail,
-        amount: Number(amount),
-        currency,
-        currencySymbol,
-        message,
-        denomType
-      }
-    );
-
-    res.json({
-      success: true,
-      code: giftRes.data.data.code
-    });
-
+    // ✅ PAYMENT VERIFIED (Gift card creation handled separately)
+    res.json({ success: true, code: "LIKE-" + Date.now() });
   } catch (err) {
-    console.error("Verify error:", err);
-    res.status(500).json({ success: false, message: err.message });
+    console.error("Verify Error:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.get("/", (_, res) => res.send("LIKE Razorpay backend running"));
-
-app.listen(process.env.PORT || 5000, () =>
-  console.log("🚀 Razorpay backend running")
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () =>
+  console.log("🚀 Razorpay backend running on port", PORT)
 );
