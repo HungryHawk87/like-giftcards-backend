@@ -25,25 +25,21 @@ app.get("/", (req, res) => {
 // ===============================
 app.post("/api/razorpay/create-order", async (req, res) => {
   try {
-    const { amount, email } = req.body;
-
-    if (!amount) {
-      return res.status(400).json({ error: "Amount required" });
-    }
+    console.log("Incoming order:", req.body);
 
     const order = await razorpay.orders.create({
-      amount: Number(amount) * 100,
-      currency: "INR",
-      receipt: "LIKE_" + Date.now(),
-      notes: { email }
+      amount: Number(req.body.amount) * 100,
+      currency: "INR"
     });
 
+    console.log("Order created:", order.id);
     res.json(order);
   } catch (err) {
-    console.error("Create Order Error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("RAZORPAY ERROR:", err);
+    res.status(500).json({ error: err.error?.description || err.message });
   }
 });
+
 
 // ===============================
 // VERIFY PAYMENT
@@ -78,4 +74,5 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log("🚀 Razorpay backend running on port", PORT)
 );
+
 
