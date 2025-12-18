@@ -9,8 +9,8 @@ app.use(cors());
 
 // 🔑 Razorpay TEST keys (ENV later)
 const razorpay = new Razorpay({
-  key_id: "rzp_test_Rt5D7w6TXkud69",
-  key_secret: "OdnRMEZGaqizY3jg5uB24gM9"
+  key_id: "rzp_test_Rt6rTO0QIYWaVk",
+  key_secret: "KfOmHp6IAJ70ij5opQ0HnC3"
 });
 
 // ===============================
@@ -78,3 +78,4 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log("🚀 Razorpay backend running on port", PORT)
 );
+
